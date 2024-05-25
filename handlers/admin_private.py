@@ -4,8 +4,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from database.orm_query import orm_add_product, orm_get_products
 
-from database.models import Product
 from filters.chat_types import ChatTypeFilter, IsAdmin
 from kbds.reply import get_keyboard
 
@@ -16,11 +16,9 @@ admin_router.message.filter(ChatTypeFilter(["private"]), IsAdmin())
 
 ADMIN_KB = get_keyboard(
     "Добавить товар",
-    "Изменить товар",
-    "Удалить товар",
-    "Я так, просто посмотреть зашел",
+    "Ассортимент",
     placeholder="Выберите действие",
-    sizes=(2, 1, 1),
+    sizes=(2,),
 )
 
 
@@ -29,19 +27,18 @@ async def admin_features(message: types.Message):
     await message.answer("Что хотите сделать?", reply_markup=ADMIN_KB)
 
 
-@admin_router.message(F.text == "Я так, просто посмотреть зашел")
-async def starring_at_product(message: types.Message):
+@admin_router.message(F.text == "Ассортимент")
+async def starring_at_product(message: types.Message, session: AsyncSession):
+    for product in await orm_get_products(session):
+        await message.answer_photo(
+            product.image,
+            caption=f"<strong>{product.name}\
+                </strong>\n{product.description}\nСтоимость: {round(product.price, 2)}",
+        )
     await message.answer("ОК, вот список товаров")
 
 
-@admin_router.message(F.text == "Изменить товар")
-async def change_product(message: types.Message):
-    await message.answer("ОК, вот список товаров")
 
-
-@admin_router.message(F.text == "Удалить товар")
-async def delete_product(message: types.Message):
-    await message.answer("Выберите товар(ы) для удаления")
 
 
 #Код ниже для машины состояний (FSM)
@@ -164,18 +161,16 @@ async def add_image(message: types.Message, state: FSMContext, session: AsyncSes
     await state.update_data(image=message.photo[-1].file_id)
     await message.answer("Товар добавлен", reply_markup=ADMIN_KB)
     data = await state.get_data()
-    
-    obj = Product(
-        name=data["name"],
-        description=data["description"],
-        price=float(data["price"]),
-        image=data["image"],  
-    )
-    session.add(obj)
+    try:
+        await orm_add_product(session, data)
+        await message.answer("Товар добавлен",  reply_markup=ADMIN_KB)
+        await state.clear()
 
-    await session.commit()
-
-    await state.clear()
+    except Exception as e:
+        await message.answer(
+            f"Ошибка: \n{str(e)}\nобратитесь к программеру, он опять денег хочет", reply_markup=ADMIN_KB
+        )
+        await state.clear()
 
 @admin_router.message(AddProduct.image)
 async def add_image2(message: types.Message, state: FSMContext):
